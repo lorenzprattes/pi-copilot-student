@@ -7,7 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
-import type { Message } from "@earendil-works/pi-ai/compat";
+import type { Api, Model, Message } from "@earendil-works/pi-ai/compat";
 import {
 	EXPECTED_API_BASE,
 	jsonResponse,
@@ -22,6 +22,7 @@ import {
 // Must precede the imports below: config.ts resolves its paths at module init.
 redirectAgentDir();
 const {
+	AutoRouter,
 	describeRouteDecision,
 	fetchRouterDecision,
 	pickRoutedModel,
@@ -182,7 +183,7 @@ describe("fetchRouterDecision", () => {
 		}
 	});
 
-	test("reports an HTTP failure with a redacted body", async () => {
+	test("reports only HTTP status, never provider response content", async () => {
 		const fetchStub = stubFetch(() =>
 			textResponse(
 				`{"error":"gone","session_token":"${SAMPLE_SESSION_TOKEN}","token":"${SAMPLE_COPILOT_TOKEN}"}`,
@@ -194,7 +195,7 @@ describe("fetchRouterDecision", () => {
 			assert.equal(result.ok, false);
 			if (!result.ok) {
 				assert.equal(result.reason, "router_error");
-				assert.match(result.detail ?? "", /^404: /);
+				assert.equal(result.detail, "HTTP 404");
 				assert.ok(!result.detail?.includes(SAMPLE_SESSION_TOKEN));
 				assert.ok(!result.detail?.includes(SAMPLE_COPILOT_TOKEN));
 				assert.ok(!result.detail?.includes("deadbeefcafe"));
@@ -264,5 +265,80 @@ describe("fetchRouterDecision", () => {
 		} finally {
 			fetchStub.restore();
 		}
+	});
+});
+
+
+describe("routing safety", () => {
+	const model = (id: string, vision = false, api = "openai-responses") =>
+		({ id, api, input: vision ? ["text", "image"] : ["text"] }) as Model<Api>;
+	const session = {
+		sessionToken: SAMPLE_SESSION_TOKEN, availableModels: ["text", "vision", "unsupported"],
+		discountedCosts: {}, expiresAtMs: Date.now() + 60000,
+	};
+	const input = {
+		base: EXPECTED_API_BASE, copilotToken: SAMPLE_COPILOT_TOKEN, session,
+		known: new Map([
+			["text", model("text")], ["vision", model("vision", true)],
+			["unsupported", model("unsupported", true, "unknown-api")],
+		]),
+		messages: [user("first question")],
+	};
+
+	test("new and retained image content invalidates text-only sticky routing", async () => {
+		const fetchStub = stubFetch(() => jsonResponse({ candidate_models: ["text"], predicted_label: "simple" }));
+		try {
+			const router = new AutoRouter();
+			assert.equal((await router.resolve(input))?.model, "text");
+			const messages = [...input.messages, user([{ type: "image", data: "AAAA", mimeType: "image/png" }])];
+			assert.equal((await router.resolve({ ...input, messages }))?.model, "vision");
+			assert.equal((await router.resolve({ ...input, messages: [...messages, user("what next?")] }))?.model, "vision");
+			assert.equal(fetchStub.calls.length, 1);
+		} finally { fetchStub.restore(); }
+	});
+
+	test("fails closed when an image has no streamable vision model in the pool", async () => {
+		const router = new AutoRouter();
+		assert.equal(await router.resolve({ ...input, session: { ...session, availableModels: ["text", "unsupported"] },
+			messages: [user([{ type: "image", data: "AAAA", mimeType: "image/png" }])] }), undefined);
+	});
+
+	test("tool-result images also require a vision model", async () => {
+		const messages = [...input.messages, { role: "toolResult", toolCallId: "x", toolName: "read", isError: false,
+			timestamp: 1, content: [{ type: "image", data: "AAAA", mimeType: "image/png" }] } as Message];
+		assert.equal((await new AutoRouter().resolve({ ...input, messages }))?.model, "vision");
+	});
+
+	test("cancellation while reading success or error bodies never falls back", async () => {
+		for (const status of [200, 500]) {
+			const controller = new AbortController();
+			const response = jsonResponse({ candidate_models: ["text"], predicted_label: "simple" }, status);
+			const read = async () => { controller.abort(); throw new DOMException("cancelled", "AbortError"); };
+			Object.defineProperty(response, status === 200 ? "json" : "text", { value: read });
+			const fetchStub = stubFetch(() => response);
+			try {
+				await assert.rejects(new AutoRouter().resolve({ ...input, signal: controller.signal }), { name: "AbortError" });
+				assert.equal(fetchStub.calls.length, 1);
+			} finally { fetchStub.restore(); }
+		}
+	});
+
+	test("already-cancelled calls do not return a cached route", async () => {
+		const router = new AutoRouter();
+		await router.resolve({ ...input, messages: [] });
+		const controller = new AbortController(); controller.abort();
+		await assert.rejects(router.resolve({ ...input, signal: controller.signal }), { name: "AbortError" });
+	});
+
+	test("a routing result from a reset conversation is discarded", async () => {
+		const router = new AutoRouter();
+		const fetchStub = stubFetch(() => {
+			router.reset();
+			return jsonResponse({ candidate_models: ["text"], predicted_label: "simple" });
+		});
+		try {
+			await assert.rejects(router.resolve(input), /conversation changed/);
+			assert.equal(router.lastDecision, undefined);
+		} finally { fetchStub.restore(); }
 	});
 });

@@ -3,8 +3,10 @@
  *
  * Asks GitHub's intent router (POST /models/session/intent) which pool model
  * fits the current prompt and falls back to the first supported pool model.
- * The protocol and cadence mirror microsoft/vscode-copilot-chat. Diff against
- * these when upgrading (verified at commit 5863f5a, October 2026):
+ * The protocol and cadence follow the legacy microsoft/vscode-copilot-chat
+ * implementation. Current VS Code has migrated to POST /auto; this extension
+ * retains the session/intent route verified with the target student account.
+ * References for this protocol:
  * - https://github.com/microsoft/vscode-copilot-chat/blob/main/src/platform/endpoint/node/routerDecisionFetcher.ts
  *   (request body, headers, 1 s timeout, RouterDecisionResponse)
  * - https://github.com/microsoft/vscode-copilot-chat/blob/main/src/platform/endpoint/node/automodeService.ts
@@ -28,7 +30,8 @@
 import { randomUUID } from "node:crypto";
 import type { Api, Message, Model } from "@earendil-works/pi-ai/compat";
 import { COPILOT_HEADERS, log } from "./config.ts";
-import { pickAutoModel, redactResponseBody } from "./helpers.ts";
+import { pickAutoModel } from "./helpers.ts";
+import { SUPPORTED_COPILOT_APIS } from "./model-support.ts";
 import { type RouterDecision, RouterDecisionSchema } from "./schemas.ts";
 import type { AutoSession } from "./session.ts";
 
@@ -77,24 +80,27 @@ export interface RoutingPrompt {
 	turnNumber: number;
 }
 
-/** The latest user message is the prompt to route; earlier turns stay local. */
+/** Route the latest user text; retain vision requirements from the whole context. */
 export function routingPrompt(messages: Message[]): RoutingPrompt {
 	let turnNumber = 0;
 	let latest: Extract<Message, { role: "user" }> | undefined;
+	let hasImage = false;
 	for (const message of messages) {
+		if ((message.role === "user" || message.role === "toolResult") && Array.isArray(message.content)) {
+			hasImage ||= message.content.some((part) => part.type === "image");
+		}
 		if (message.role !== "user") continue;
 		turnNumber++;
 		latest = message;
 	}
-	if (!latest) return { text: "", hasImage: false, turnNumber };
+	if (!latest) return { text: "", hasImage, turnNumber };
 	if (typeof latest.content === "string")
-		return { text: latest.content.trim(), hasImage: false, turnNumber };
+		return { text: latest.content.trim(), hasImage, turnNumber };
 	const text = latest.content
 		.filter((part) => part.type === "text")
 		.map((part) => part.text)
 		.join("\n")
 		.trim();
-	const hasImage = latest.content.some((part) => part.type === "image");
 	return { text, hasImage, turnNumber };
 }
 
@@ -148,9 +154,9 @@ export async function fetchRouterDecision(
 	const signal = request.signal
 		? AbortSignal.any([request.signal, timeout])
 		: timeout;
-	let res: Response;
+	request.signal?.throwIfAborted();
 	try {
-		res = await fetch(`${request.base}/models/session/intent`, {
+		const res = await fetch(`${request.base}/models/session/intent`, {
 			method: "POST",
 			headers: {
 				Authorization: `Bearer ${request.copilotToken}`,
@@ -165,31 +171,36 @@ export async function fetchRouterDecision(
 			}),
 			signal,
 		});
+		// Body reads can abort after fetch has already resolved its headers.
+		if (!res.ok) {
+			await res.text();
+			request.signal?.throwIfAborted();
+			if (timeout.aborted) return { ok: false, reason: "router_timeout" };
+			return { ok: false, reason: "router_error", detail: `HTTP ${res.status}` };
+		}
+		let payload: unknown;
+		try {
+			payload = await res.json();
+		} catch (error) {
+			request.signal?.throwIfAborted();
+			if (timeout.aborted) return { ok: false, reason: "router_timeout" };
+			if (error instanceof SyntaxError) return { ok: false, reason: "router_invalid_payload" };
+			throw error;
+		}
+		request.signal?.throwIfAborted();
+		if (timeout.aborted) return { ok: false, reason: "router_timeout" };
+		const parsed = RouterDecisionSchema.safeParse(payload);
+		if (!parsed.success) return { ok: false, reason: "router_invalid_payload" };
+		return { ok: true, decision: parsed.data };
 	} catch (error) {
-		if (request.signal?.aborted) throw error;
+		request.signal?.throwIfAborted();
 		if (timeout.aborted) return { ok: false, reason: "router_timeout" };
 		return {
 			ok: false,
 			reason: "router_error",
-			detail: redactResponseBody(
-				error instanceof Error ? error.message : String(error),
-				120,
-			),
+			detail: "Network request failed",
 		};
 	}
-	if (!res.ok) {
-		const body = await res.text().catch(() => "");
-		return {
-			ok: false,
-			reason: "router_error",
-			detail: `${res.status}: ${redactResponseBody(body, 120)}`,
-		};
-	}
-	const parsed = RouterDecisionSchema.safeParse(
-		await res.json().catch(() => undefined),
-	);
-	if (!parsed.success) return { ok: false, reason: "router_invalid_payload" };
-	return { ok: true, decision: parsed.data };
 }
 
 export interface ResolveRouteInput {
@@ -213,6 +224,7 @@ export interface AutoRouterOptions {
  */
 export class AutoRouter {
 	#sticky: RouteDecision | undefined;
+	#generation = 0;
 	#previousModel: string | undefined;
 	#conversationId = randomUUID();
 	#last: RouteDecision | undefined;
@@ -229,11 +241,13 @@ export class AutoRouter {
 
 	/** Forget the sticky route; the next prompt is routed again. */
 	invalidate(): void {
+		this.#generation++;
 		this.#sticky = undefined;
 	}
 
 	/** New conversation: no sticky route, no previous model, fresh id. */
 	reset(): void {
+		this.#generation++;
 		this.#sticky = undefined;
 		this.#previousModel = undefined;
 		this.#conversationId = randomUUID();
@@ -244,8 +258,14 @@ export class AutoRouter {
 	 * pool holds nothing this extension can stream; the caller reports that.
 	 */
 	async resolve(input: ResolveRouteInput): Promise<RouteDecision | undefined> {
+		input.signal?.throwIfAborted();
+		const generation = this.#generation;
 		const { session, known } = input;
-		const supported = new Set(known.keys());
+		const prompt = routingPrompt(input.messages);
+		const supported = new Set([...known.values()]
+			.filter((model) => (SUPPORTED_COPILOT_APIS as readonly string[]).includes(model.api))
+			.filter((model) => !prompt.hasImage || model.input.includes("image"))
+			.map((model) => model.id));
 		const pool = session.availableModels;
 		if (!pickAutoModel(pool, supported)) return undefined;
 
@@ -253,8 +273,9 @@ export class AutoRouter {
 		if (sticky && pool.includes(sticky.model) && supported.has(sticky.model))
 			return sticky;
 
-		const prompt = routingPrompt(input.messages);
 		const decision = await this.#decide(input, prompt, supported);
+		input.signal?.throwIfAborted();
+		if (generation !== this.#generation) throw new Error("Copilot Auto: conversation changed while routing; retry the request.");
 		this.#sticky = decision;
 		this.#previousModel = decision.model;
 		this.#last = decision;
@@ -325,7 +346,7 @@ export class AutoRouter {
 		if (prompt.hasImage) {
 			const vision = new Set(
 				[...input.known.values()]
-					.filter((model) => model.input.includes("image"))
+					.filter((model) => supported.has(model.id) && model.input.includes("image"))
 					.map((model) => model.id),
 			);
 			const visionPick = pickAutoModel(pool, vision);
