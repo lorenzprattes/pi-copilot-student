@@ -19,9 +19,13 @@ export const COPILOT_HEADERS: Record<string, string> = {
 	"X-GitHub-Api-Version": COPILOT_API_VERSION,
 };
 
-export const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
-export const AUTH_PATH = process.env.PI_COPILOT_AUTH || join(AGENT_DIR, "auth.json");
-const LOG_PATH = process.env.PI_COPILOT_LOG;
+export function expandHomePath(value: string): string {
+    if (value === "~") return homedir();
+    return value.startsWith("~/") ? join(homedir(), value.slice(2)) : value;
+}
+export const AGENT_DIR = expandHomePath(process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent"));
+export const AUTH_PATH = expandHomePath(process.env.PI_COPILOT_AUTH || join(AGENT_DIR, "auth.json"));
+const LOG_PATH = process.env.PI_COPILOT_LOG ? expandHomePath(process.env.PI_COPILOT_LOG) : undefined;
 // Conservative shared limits: Auto may choose a different model after compaction.
 export const AUTO_CONTEXT_WINDOW = 64000;
 export const AUTO_MAX_TOKENS = 8192;

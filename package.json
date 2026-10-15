@@ -31,7 +31,9 @@
     "src",
     "README.md",
     "LICENSE",
-    "NOTICE.md"
+    "NOTICE.md",
+    "ALTERNATIVES.md",
+    "VALIDATION.md"
   ],
   "pi": {
     "extensions": [
@@ -49,7 +51,7 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
-    "zod": "^4.6.5"
+    "zod": "4.6.5"
   },
   "contributors": [
     "Fabricio Borgobello (upstream pi-github-copilot-auto)"

@@ -121,7 +121,7 @@ export function streamCopilotAuto(
 			}
 			deps.onRoute?.(decision);
 
-			const concreteWithBase = { ...concrete, baseUrl: base };
+			const concreteWithBase = { ...concrete, baseUrl: base, maxTokens: Math.min(concrete.maxTokens, AUTO_MAX_TOKENS) };
 			const streamOptions: SimpleStreamOptions = {
 				...options,
 				apiKey: copilotToken,

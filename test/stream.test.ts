@@ -644,3 +644,16 @@ describe("student package request boundaries", () => {
     } finally { stub.restore(); }
   });
 });
+
+
+test("reasoning budgets cannot raise the concrete output cap", async () => {
+  const target = [...supportedCopilotModels().values()].find(model => model.api === "anthropic-messages" && model.id === "claude-haiku-4.5");
+  assert.ok(target, "pinned Pi catalog should include non-adaptive Haiku 4.5");
+  const stub = stubFetch(copilotRoutes({pool: [target.id], chat: () => sseResponse(ANTHROPIC_SSE)}));
+  try {
+    const result = await streamOnce({stream: {reasoning: "high"}});
+    assert.equal(result.events.at(-1)?.type, "done");
+    const [chat] = chatCalls(stub.calls);
+    assert.ok(JSON.parse(String(chat.init?.body)).max_tokens <= 8192);
+  } finally { stub.restore(); }
+});
