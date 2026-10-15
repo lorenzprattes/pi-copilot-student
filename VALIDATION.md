@@ -1,9 +1,10 @@
 # Release validation
 
-Version: **0.1.0**. Checked October 15, 2026, on macOS with Pi **1.2.0** and Node.js **24.11.1**.
+Version: **0.1.1**. Checked October 15, 2026, on macOS with Pi **1.2.0** and Node.js **24.11.1**.
 
 ## Automated checks
 
+- Clean dependency install: `npm ci --ignore-scripts` passed.
 - TypeScript: `npm run check`.
 - Unit and mocked integration tests: **75 passed**, using `npm test`.
 - Package contents: `npm pack`; runtime source, documentation and attribution only, with no credentials or development dependencies bundled.

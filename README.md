@@ -11,7 +11,7 @@ You need **Pi 1.2.0**, **Node.js 22.19 or newer**, and active GitHub Copilot acc
 In your terminal:
 
 ```sh
-pi install git:github.com/lorenzprattes/pi-copilot-student@v0.1.0
+pi install git:github.com/lorenzprattes/pi-copilot-student@v0.1.1
 pi
 ```
 
@@ -73,7 +73,7 @@ Pi’s dollar estimate is not a reliable measure of Copilot subscription usage. 
 
 ## Compatibility and validation
 
-Version 0.1.0 targets Pi **1.2.0**. Other Pi versions and GitHub Enterprise accounts are not live-validated. GitHub can change its private Auto endpoints independently of Pi or this package.
+Version 0.1.1 targets Pi **1.2.0**. Other Pi versions and GitHub Enterprise accounts are not live-validated. GitHub can change its private Auto endpoints independently of Pi or this package.
 
 This release uses `/models/session` and `/models/session/intent`. Microsoft’s newer client also implements `/auto`; that endpoint returned HTTP 404 in our student-account check, so we retained the working session route. This is an observation about that account/integration, not proof that `/auto` is unavailable everywhere.
 
@@ -86,7 +86,7 @@ The installation command pins a release. To move to a later release, install its
 To uninstall:
 
 ```sh
-pi remove git:github.com/lorenzprattes/pi-copilot-student@v0.1.0
+pi remove git:github.com/lorenzprattes/pi-copilot-student@v0.1.1
 ```
 
 Then restart Pi. Your normal Copilot login remains available to Pi.

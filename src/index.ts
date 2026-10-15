@@ -10,7 +10,7 @@
  * ~/.pi/agent/auth.json (no second /login), refreshes the short-lived Copilot
  * token itself, then streams through Pi's matching built-in API.
  *
- * Install: pi install git:github.com/lorenzprattes/pi-copilot-student@v0.1.0
+ * Install: pi install git:github.com/lorenzprattes/pi-copilot-student@v0.1.1
  * Local development: pi -e ./ (then /reload after editing this source)
  *
  */
