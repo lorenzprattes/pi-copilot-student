@@ -1,0 +1,60 @@
+{
+  "name": "@lorenzprattes/pi-copilot-student",
+  "version": "0.1.0",
+  "description": "GitHub Copilot Auto in Pi, with a simple setup and diagnostics for students.",
+  "type": "module",
+  "license": "MIT",
+  "author": "Lorenz Prattes",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/lorenzprattes/pi-copilot-student.git"
+  },
+  "homepage": "https://github.com/lorenzprattes/pi-copilot-student#readme",
+  "bugs": {
+    "url": "https://github.com/lorenzprattes/pi-copilot-student/issues"
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "extension",
+    "github-copilot",
+    "copilot",
+    "auto-routing",
+    "llm"
+  ],
+  "scripts": {
+    "test": "node --test test/*.test.ts",
+    "check": "tsc --noEmit"
+  },
+  "files": [
+    "src",
+    "README.md",
+    "LICENSE",
+    "NOTICE.md"
+  ],
+  "pi": {
+    "extensions": [
+      "./src/index.ts"
+    ]
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "devDependencies": {
+    "@earendil-works/pi-ai": "1.2.0",
+    "@earendil-works/pi-coding-agent": "1.2.0",
+    "@types/node": "^24.0.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "zod": "^4.6.5"
+  },
+  "contributors": [
+    "Fabricio Borgobello (upstream pi-github-copilot-auto)"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  }
+}
