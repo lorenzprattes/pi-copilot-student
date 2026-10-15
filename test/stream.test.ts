@@ -435,7 +435,7 @@ describe("streamCopilotAuto", () => {
 			assert.equal(route.model, first.id);
 			if (route.source === "default") {
 				assert.equal(route.reason, "router_error");
-				assert.match(route.detail ?? "", /^404: /);
+				assert.match(route.detail ?? "", /^HTTP 404$/);
 				for (const secret of [SAMPLE_SESSION_TOKEN, SAMPLE_COPILOT_TOKEN])
 					assert.ok(
 						!route.detail?.includes(secret),
@@ -612,4 +612,35 @@ describe("streamCopilotAuto", () => {
 			fetchStub.restore();
 		}
 	});
+});
+
+describe("student package request boundaries", () => {
+  test("preserves custom headers, protects the session token, and caps output", async () => {
+    const target = firstModelWithApi("anthropic-messages");
+    const stub = stubFetch(copilotRoutes({pool: [target.id], chat: () => sseResponse(ANTHROPIC_SSE)}));
+    try {
+      const { events } = await streamOnce({stream: {
+        headers: {"X-Workshop-Trace": "trace-123", "copilot-session-token": "wrong-token", "authorization": "wrong-auth"},
+        maxTokens: 100000,
+      }});
+      assert.equal(events.at(-1)?.type, "done");
+      const [chat] = chatCalls(stub.calls);
+      assert.equal(chat.headers["x-workshop-trace"], "trace-123");
+      assert.equal(chat.headers["copilot-session-token"], SAMPLE_SESSION_TOKEN);
+      assert.equal(chat.headers.authorization, `Bearer ${SAMPLE_COPILOT_TOKEN}`);
+      assert.ok(JSON.parse(String(chat.init?.body)).max_tokens <= 8192);
+    } finally { stub.restore(); }
+  });
+
+  test("does not expose arbitrary response contents from the model SDK", async () => {
+    const target = firstModelWithApi("anthropic-messages");
+    const secret = "private-workshop-prompt-and-credential";
+    const stub = stubFetch(copilotRoutes({pool: [target.id], chat: () => textResponse(secret, 400)}));
+    try {
+      const { events } = await streamOnce({});
+      const error = errorEvent(events);
+      assert.match(error.error.errorMessage ?? "", /model request failed/);
+      assert.ok(!JSON.stringify(events).includes(secret));
+    } finally { stub.restore(); }
+  });
 });

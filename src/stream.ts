@@ -14,14 +14,15 @@ import {
 	type SimpleStreamOptions,
 	type TranscriptContext,
 } from "@earendil-works/pi-ai/compat";
+import { randomUUID } from "node:crypto";
 import { getCopilotAuth } from "./auth.ts";
-import { COPILOT_HEADERS } from "./config.ts";
+import { AUTO_MAX_TOKENS, COPILOT_HEADERS } from "./config.ts";
 import {
 	supportedCopilotApiList,
 	supportedCopilotModels,
 } from "./model-support.ts";
 import type { AutoRouter, RouteDecision } from "./router.ts";
-import { getAutoSession } from "./session.ts";
+import { getAutoSession, resetAutoSessions } from "./session.ts";
 
 function streamConcreteModel(
 	model: Model<Api>,
@@ -61,6 +62,19 @@ export interface StreamCopilotAutoDeps {
 	onRoute?: (decision: RouteDecision) => void;
 }
 
+const routerState = new WeakMap<AutoRouter, { key: string; auth: string }>();
+export function resetStreamState(router: AutoRouter): void {
+    const state = routerState.get(router);
+    if (state) resetAutoSessions(state.key);
+    routerState.delete(router);
+}
+
+/** Never repeat an SDK's raw error response: it can contain a prompt or credential. */
+export function safeStreamError(message: string | undefined): string {
+  const status = message?.match(/(?:^|HTTP |status[ :]+|error \()(\d{3})\b/i)?.[1];
+  return `Copilot Auto: model request failed${status ? ` (HTTP ${status})` : ""}. Run /copilot-student-doctor; check your Copilot access and usage at github.com/settings/copilot.`;
+}
+
 export function streamCopilotAuto(
 	model: Model<Api>,
 	context: TranscriptContext,
@@ -74,7 +88,15 @@ export function streamCopilotAuto(
 			const signal = options?.signal;
 			const { token: copilotToken, apiBase: base } =
 				await getCopilotAuth(signal);
-			const session = await getAutoSession(base, copilotToken, signal);
+			signal?.throwIfAborted();
+            let state = routerState.get(deps.router);
+            const authIdentity = `${base}\n${copilotToken}`;
+            if (!state || state.auth !== authIdentity || (options?.sessionId && state.key !== options.sessionId)) {
+                if (state) { deps.router.reset(); resetStreamState(deps.router); }
+                state = { key: options?.sessionId ?? randomUUID(), auth: authIdentity };
+                routerState.set(deps.router, state);
+            }
+            const session = await getAutoSession(base, copilotToken, signal, state.key);
 
 			const known = supportedCopilotModels();
 			const decision = await deps.router.resolve({
@@ -103,8 +125,13 @@ export function streamCopilotAuto(
 			const streamOptions: SimpleStreamOptions = {
 				...options,
 				apiKey: copilotToken,
+                maxTokens: Math.min(options?.maxTokens ?? AUTO_MAX_TOKENS, AUTO_MAX_TOKENS, concrete.maxTokens),
 				headers: {
+                    ...Object.fromEntries(Object.entries(options?.headers ?? {}).filter(([key]) =>
+                        !["authorization", "copilot-session-token", "x-api-key", "api-key", ...Object.keys(COPILOT_HEADERS).map(k => k.toLowerCase())].includes(key.toLowerCase())
+                    )),
 					...COPILOT_HEADERS,
+                    Authorization: `Bearer ${copilotToken}`,
 					"Copilot-Session-Token": session.sessionToken,
 				},
 			};
@@ -114,7 +141,11 @@ export function streamCopilotAuto(
 				context,
 				streamOptions,
 			);
-			for await (const event of inner) stream.push(event);
+			for await (const event of inner) {
+                if (event.type === "error") {
+                    stream.push({ ...event, error: { ...event.error, errorMessage: safeStreamError(event.error.errorMessage) } });
+                } else stream.push(event);
+            }
 			stream.end();
 		} catch (error) {
 			// Mirror the built-in providers: a cancelled request is an aborted
@@ -145,7 +176,7 @@ export function streamCopilotAuto(
 						},
 					},
 					stopReason,
-					errorMessage: error instanceof Error ? error.message : String(error),
+					errorMessage: error instanceof Error && error.message.startsWith("Copilot Auto:") ? error.message : safeStreamError(undefined),
 					timestamp: Date.now(),
 				},
 			});

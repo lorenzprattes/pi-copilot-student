@@ -11,7 +11,6 @@ import {
 	deriveApiBase,
 	normalizeEnterpriseDomain,
 	pickAutoModel,
-	redactResponseBody,
 	tokenExchangeUrl,
 } from "../src/helpers.ts";
 
@@ -112,58 +111,3 @@ describe("pickAutoModel", () => {
 	});
 });
 
-describe("redactResponseBody", () => {
-	test("passes an ordinary error body through untouched", () => {
-		const body =
-			'{"message":"Bad credentials","documentation_url":"https://x"}';
-		assert.equal(redactResponseBody(body), body);
-	});
-
-	test("redacts token-bearing JSON fields but keeps the surrounding shape", () => {
-		const out = redactResponseBody(
-			'{"token":"tid=abc;exp=1","refresh_token":"gho_secret","message":"nope"}',
-		);
-		assert.equal(
-			out,
-			'{"token":"[redacted]","refresh_token":"[redacted]","message":"nope"}',
-		);
-	});
-
-	test("redacts JSON token fields regardless of case or spacing", () => {
-		assert.equal(
-			redactResponseBody('{"Access_Token" : "abc"}'),
-			'{"Access_Token" : "[redacted]"}',
-		);
-	});
-
-	test("redacts bare GitHub tokens outside JSON", () => {
-		assert.equal(
-			redactResponseBody(
-				"upstream rejected gho_16CharactersLongToken0000000000 for user",
-			),
-			"upstream rejected [redacted] for user",
-		);
-	});
-
-	test("redacts a bare Copilot token through to its next delimiter", () => {
-		assert.equal(
-			redactResponseBody("echoed tid=deadbeef;exp=1 end"),
-			"echoed tid=[redacted] end",
-		);
-	});
-
-	test("truncates long bodies and reports how much was dropped", () => {
-		const out = redactResponseBody("x".repeat(250), 200);
-		assert.equal(out, `${"x".repeat(200)}... [truncated 50 chars]`);
-	});
-
-	test("does not truncate a body exactly at the limit", () => {
-		assert.equal(redactResponseBody("x".repeat(200), 200), "x".repeat(200));
-	});
-
-	test("measures truncation after redaction, not before", () => {
-		// A long secret shrinks to "[redacted]", so the result stays under the cap.
-		const out = redactResponseBody(`{"token":"${"a".repeat(400)}"}`, 200);
-		assert.equal(out, '{"token":"[redacted]"}');
-	});
-});

@@ -10,7 +10,7 @@
  * ~/.pi/agent/auth.json (no second /login), refreshes the short-lived Copilot
  * token itself, then streams through Pi's matching built-in API.
  *
- * Install: pi install npm:pi-github-copilot-auto
+ * Install: pi install git:github.com/lorenzprattes/pi-copilot-student@v0.1.0
  * Local development: pi -e ./ (then /reload after editing this source)
  *
  */
@@ -19,10 +19,10 @@ import type {
 	ExtensionAPI,
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { AUTO_MODEL_ID, log, PROVIDER_ID } from "./config.ts";
+import { AUTO_CONTEXT_WINDOW, AUTO_MAX_TOKENS, AUTO_MODEL_ID, log, PROVIDER_ID } from "./config.ts";
 import { runDoctor } from "./doctor.ts";
 import { AutoRouter, type RouteDecision } from "./router.ts";
-import { streamCopilotAuto } from "./stream.ts";
+import { resetStreamState, streamCopilotAuto } from "./stream.ts";
 
 const STATUS_KEY = "copilot-auto-route";
 
@@ -54,12 +54,14 @@ export default function (pi: ExtensionAPI) {
 	pi.on("session_start", (_event, ctx) => {
 		session = ctx;
 		router.reset();
+        resetStreamState(router);
 	});
 	pi.on("session_shutdown", () => {
 		// Idempotent: cancellation, reload, session replacement and process exit
 		// can all converge here.
 		clearRoute();
 		router.reset();
+        resetStreamState(router);
 		session = undefined;
 	});
 	pi.on("session_compact", () => {
@@ -71,23 +73,27 @@ export default function (pi: ExtensionAPI) {
 		if (event.model.provider !== PROVIDER_ID) clearRoute();
 	});
 
-	pi.registerCommand("copilot-auto-doctor", {
+	const doctorCommand = {
 		description: "Check Copilot Auto auth, token exchange, and Auto routing",
-		handler: async (_args, ctx) => {
+		handler: async (_args: string, ctx: ExtensionContext) => {
 			try {
 				const report = await runDoctor(router);
 				log(`doctor ok\n${report}`);
 				// notify reaches interactive and RPC clients; elsewhere the log file
 				// is the only channel.
 				if (ctx.hasUI) ctx.ui.notify(report, "info");
+                else console.log(report);
 			} catch (error) {
 				const message = error instanceof Error ? error.message : String(error);
 				log(`doctor failed: ${message}`);
 				if (ctx.hasUI)
 					ctx.ui.notify(`Copilot Auto doctor failed\n${message}`, "error");
+                else console.error(message);
 			}
 		},
-	});
+	};
+    pi.registerCommand("copilot-student-doctor", doctorCommand);
+    pi.registerCommand("copilot-auto-doctor", doctorCommand);
 
 	pi.registerProvider(PROVIDER_ID, {
 		name: "GitHub Copilot Auto",
@@ -102,8 +108,8 @@ export default function (pi: ExtensionAPI) {
 				input: ["text", "image"],
 				// Static 0 cost — Auto routes across models and provider billing is opaque.
 				cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-				contextWindow: 400000,
-				maxTokens: 128000,
+				contextWindow: AUTO_CONTEXT_WINDOW,
+				maxTokens: AUTO_MAX_TOKENS,
 			},
 		],
 		streamSimple: (m, context, options) =>

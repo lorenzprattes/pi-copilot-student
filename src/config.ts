@@ -1,5 +1,5 @@
 /**
- * Static config + logging for pi-github-copilot-auto.
+ * Static config + opt-in diagnostics for pi-copilot-student.
  */
 import { appendFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -19,11 +19,15 @@ export const COPILOT_HEADERS: Record<string, string> = {
 	"X-GitHub-Api-Version": COPILOT_API_VERSION,
 };
 
-export const AUTH_PATH =
-	process.env.PI_COPILOT_AUTH || join(homedir(), ".pi", "agent", "auth.json");
-const LOG_PATH = join(homedir(), ".pi", "agent", "copilot-auto.log");
+export const AGENT_DIR = process.env.PI_CODING_AGENT_DIR || join(homedir(), ".pi", "agent");
+export const AUTH_PATH = process.env.PI_COPILOT_AUTH || join(AGENT_DIR, "auth.json");
+const LOG_PATH = process.env.PI_COPILOT_LOG;
+// Conservative shared limits: Auto may choose a different model after compaction.
+export const AUTO_CONTEXT_WINDOW = 64000;
+export const AUTO_MAX_TOKENS = 8192;
 
 export function log(msg: string): void {
+	if (!LOG_PATH) return;
 	try {
 		appendFileSync(LOG_PATH, `${new Date().toISOString()} ${msg}\n`, "utf8");
 	} catch {

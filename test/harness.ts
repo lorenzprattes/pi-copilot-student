@@ -17,8 +17,8 @@ import { join } from "node:path";
 export function redirectAgentDir(): string {
 	const home = mkdtempSync(join(tmpdir(), "copilot-auto-test-"));
 	mkdirSync(join(home, ".pi", "agent"), { recursive: true });
-	process.env.HOME = home;
-	process.env.USERPROFILE = home;
+	process.env.PI_CODING_AGENT_DIR = join(home, ".pi", "agent");
+	process.env.PI_COPILOT_LOG = join(home, ".pi", "agent", "copilot-auto.log");
 	const authPath = join(home, ".pi", "agent", "auth.json");
 	process.env.PI_COPILOT_AUTH = authPath;
 	process.on("exit", () => rmSync(home, { recursive: true, force: true }));
@@ -114,7 +114,7 @@ const NOW_SECONDS = () => Math.floor(Date.now() / 1000);
  * satisfy an assertion about request count.
  */
 export function uncacheableTokenPayload(token = SAMPLE_COPILOT_TOKEN) {
-	return { token, expires_at: NOW_SECONDS() };
+	return { token, expires_at: NOW_SECONDS() + 30 };
 }
 
 /** An Auto session payload too near expiry to be cached. */
@@ -123,7 +123,7 @@ export function uncacheableSessionPayload(availableModels: string[]) {
 		session_token: SAMPLE_SESSION_TOKEN,
 		available_models: availableModels,
 		discounted_costs: {},
-		expires_at: NOW_SECONDS(),
+		expires_at: NOW_SECONDS() + 30,
 	};
 }
 
