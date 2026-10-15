@@ -79,12 +79,25 @@ export function stubFetch(
 		if (signal?.aborted) throw abortError();
 		if (!signal) return handler(call);
 		return new Promise<Response>((resolve, reject) => {
-			signal.addEventListener("abort", () => reject(abortError()), {
-				once: true,
-			});
+			// A real pending fetch keeps its socket alive. AbortSignal.timeout's
+			// timer is unreferenced, so the mock must supply that active handle
+			// too, or Node can exit before a timeout assertion completes.
+			const activeRequest = setInterval(() => {}, 1_000);
+			const cleanup = () => {
+				clearInterval(activeRequest);
+				signal.removeEventListener("abort", onAbort);
+			};
+			const onAbort = () => {
+				cleanup();
+				reject(abortError());
+			};
+			signal.addEventListener("abort", onAbort, { once: true });
 			Promise.resolve()
 				.then(() => handler(call))
-				.then(resolve, reject);
+				.then(
+					(response) => { cleanup(); resolve(response); },
+					(error) => { cleanup(); reject(error); },
+				);
 		});
 	}) as typeof globalThis.fetch;
 	return {
